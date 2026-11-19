@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$popup filter test</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  code { background: #8882; padding: .1em .3em; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  th, td { text-align: left; vertical-align: top; padding: .6rem .5rem; border-top: 1px solid #8884; }
+  button, a.test { font: inherit; }
+  .pass { color: #0a7d32; font-weight: 600; }
+  .fail { color: #c22; font-weight: 600; }
+  .manual { color: #777; }
+</style>
+</head>
+<body>
+<h1>$popup filter test</h1>
+
+<p>Setup:</p>
+<ol>
+  <li>Enable <code>brave://flags/#brave-adblock-popup-blocking</code> and relaunch.</li>
+  <li>Add this line under Custom filters in <code>brave://settings/shields/filters</code> and save: <code>||example.org^$popup</code></li>
+  <li>Keep Shields up on this page.</li>
+</ol>
+
+<p>Run each test once, top to bottom. Tests 1 to 3 fill in their own result. Tests 4 to 6 need you to look at what the tab does.</p>
+
+<table>
+  <tr><th>#</th><th>Test</th><th>Expected</th><th>Result</th></tr>
+  <tr>
+    <td>1</td>
+    <td><button id="open-blocked">Open example.org from script</button></td>
+    <td>A tab opens and closes right away. example.org never loads.</td>
+    <td id="r1"></td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><button id="open-allowed">Open example.com from script</button></td>
+    <td>example.com opens in a new tab and stays open.</td>
+    <td id="r2"></td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><button id="blank-then-navigate">Open a blank tab, then send it to example.org</button></td>
+    <td>A blank tab opens and closes within a second.</td>
+    <td id="r3"></td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><button id="noopener">Open example.org with noopener</button></td>
+    <td>A tab opens and closes right away.</td>
+    <td class="manual">check the tab</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><button id="script-click">Click a link to example.org from script</button></td>
+    <td>A tab opens and closes right away.</td>
+    <td class="manual">check the tab</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><a class="test" id="link" href="https://example.org/" target="_blank">Link to example.org</a></td>
+    <td>Click it, or focus it and press Enter. example.org opens and stays open, because you clicked the link yourself.</td>
+    <td class="manual">check the tab</td>
+  </tr>
+</table>
+
+<script>
+const BLOCKED = 'https://example.org/';
+const ALLOWED = 'https://example.com/';
+
+function report(id, pass, text) {
+  const cell = document.getElementById(id);
+  cell.textContent = (pass ? 'PASS: ' : 'FAIL: ') + text;
+  cell.className = pass ? 'pass' : 'fail';
+}
+
+function check(id, w, shouldClose) {
+  if (!w) {
+    report(id, false, 'no window was opened');
+    return;
+  }
+  setTimeout(() => {
+    if (shouldClose) {
+      report(id, w.closed, w.closed ? 'tab was closed' : 'tab stayed open');
+    } else {
+      report(id, !w.closed, w.closed ? 'tab was closed' : 'tab stayed open');
+    }
+  }, 2000);
+}
+
+document.getElementById('open-blocked').onclick = () => {
+  check('r1', window.open(BLOCKED), true);
+};
+
+document.getElementById('open-allowed').onclick = () => {
+  check('r2', window.open(ALLOWED), false);
+};
+
+document.getElementById('blank-then-navigate').onclick = () => {
+  const w = window.open();
+  if (w) {
+    setTimeout(() => { w.location = BLOCKED; }, 300);
+  }
+  check('r3', w, true);
+};
+
+document.getElementById('noopener').onclick = () => {
+  window.open(BLOCKED, '_blank', 'noopener');
+};
+
+document.getElementById('script-click').onclick = () => {
+  const a = document.createElement('a');
+  a.href = BLOCKED;
+  a.target = '_blank';
+  a.click();
+};
+</script>
+</body>
+</html>
