@@ -19,15 +19,15 @@
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; vertical-align: middle; padding: .5rem; border-top: 1px solid #8884; }
   button { font: inherit; }
+  td button.manual { font-size: .85em; }
   iframe { border: 1px solid #8886; width: 6rem; height: 2.4rem; vertical-align: middle; }
   .overlay-box { position: relative; display: inline-grid; place-items: center; width: 10rem; height: 3rem; border: 2px dashed #8888; }
   .overlay-box a { position: absolute; inset: 0; opacity: 0; }
   .reset { font-size: .85em; margin-right: .5rem; }
   .badge { display: inline-block; padding: .05em .55em; border-radius: 999px; font-size: .9em; }
   .Blocked { background: #dbe7ff; color: #1d3f8f; }
-  .Opens { background: #e9e9ec; color: #444; }
-  .differs td:first-child::after { content: " *"; }
-  .differs td:nth-child(3) .badge { font-weight: 600; outline: 2px solid currentColor; }
+  .Opened { background: #e9e9ec; color: #444; }
+  .expected { color: #666; }
 </style>
 </head>
 <body>
@@ -35,16 +35,16 @@
 
 <ol>
   <li>Add <code id="filter-line"></code> as a custom filter (Brave: <code>brave://settings/shields/filters</code>, with
-    <code>brave://flags/#brave-adblock-popup-blocking</code> on. uBO: "My filters").</li>
+    <code>brave://flags/#brave-adblock-popup-blocking</code> on).</li>
   <li>For each row, click <b>reset</b>, then the button or link. uBO lets through the last link you clicked, so
     reset keeps one case from affecting the next.</li>
-  <li><b>Blocked</b> means a tab or window opens and closes right away. In Brave it's then listed under the blocked
-    pop-up icon in the address bar.</li>
+  <li>The result fills in after a few seconds. Where the page can't see the window, click what happened.
+    <b>Blocked</b> means a tab or window opened and closed right away.</li>
 </ol>
-<p>With Shields down or the flag off, everything opens. Rows marked * behave differently in uBO.</p>
+<p>Expected is for Brave with the flag on. With Shields down or the flag off, everything opens.</p>
 
 <table id="cases">
-  <tr><th>Case</th><th>Try it</th><th>Brave</th><th>uBO</th></tr>
+  <tr><th>Case</th><th>Try it</th><th>Expected</th><th>Result</th></tr>
 </table>
 
 <script>
@@ -56,6 +56,14 @@ const REDIRECT =
 const redirectTo = (url) => REDIRECT + encodeURIComponent(url);
 const OTHER = new URL('?other=1', TARGET).href;
 const XFRAME = params.get('xframe');
+// How long to wait before checking whether a popup was closed.
+const WAIT_MS = 2500;
+
+// Opens `url` from a frame and tells the parent page whether it was closed.
+const FRAME_SCRIPT = (id, url) =>
+    `const w = window.open(${JSON.stringify(url)});` +
+    `setTimeout(() => parent.postMessage({popupTest: ${JSON.stringify(id)},` +
+    ` closed: w ? w.closed : null}, '*'), ${WAIT_MS});`;
 
 // A popup opened by the "hop" case lands on this page, which then navigates
 // itself to the target.
@@ -67,7 +75,8 @@ if (HOP) {
   // Framed by the cross-site iframe case.
   document.body.style.margin = '0';
   document.body.innerHTML = '<button id="open">Open</button>';
-  document.getElementById('open').onclick = () => window.open(TARGET);
+  document.getElementById('open').onclick =
+      () => new Function(FRAME_SCRIPT(params.get('frame'), TARGET))();
 } else {
   setUp();
 }
@@ -77,97 +86,144 @@ function setUp() {
   document.getElementById('filter-line').textContent =
       '||' + new URL(TARGET).hostname + '^$popup';
 
+  const show = (id, result) => {
+    document.getElementById('result-' + id).innerHTML =
+        `<span class="badge ${result}">${result}</span>`;
+  };
+  const askTester = (id) => {
+    document.getElementById('result-' + id).innerHTML =
+        `<button class="manual" data-result="Opened">Opened</button> ` +
+        `<button class="manual" data-result="Blocked">Blocked</button>`;
+  };
+  // Shows whether `w` was closed, or asks the tester if there's no window to
+  // check.
+  const watch = (id, w) => {
+    if (!w) {
+      askTester(id);
+      return;
+    }
+    document.getElementById('result-' + id).textContent = 'Checking…';
+    setTimeout(() => show(id, w.closed ? 'Blocked' : 'Opened'), WAIT_MS);
+  };
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.popupTest) {
+      if (e.data.closed === null) {
+        askTester(e.data.popupTest);
+      } else {
+        show(e.data.popupTest, e.data.closed ? 'Blocked' : 'Opened');
+      }
+    }
+  });
+
   const handlers = {};
   const button = (id, onclick) => {
     handlers[id] = onclick;
     return `<button id="open-${id}" data-open="${id}">Open</button>`;
   };
-  const link = (id, href, rel) =>
-      `<a id="open-${id}" href="${escape(href)}" target="_blank" rel="${rel}">Link</a>`;
+  // The page can't see a window a link opens, so the tester says.
+  const unseen = (id, html) => {
+    handlers[id] = () => askTester(id);
+    return html.replace('<a ', `<a data-open="${id}" `);
+  };
+  const link = (id, href, rel) => unseen(id,
+      `<a id="open-${id}" href="${escape(href)}" target="_blank" rel="${rel}">Link</a>`);
   const frame = (id, sandbox) => {
-    const doc = `<button id="open" onclick="window.open(${escape(JSON.stringify(TARGET))})">Open</button>`;
+    const doc = `<button id="open" onclick="${escape(FRAME_SCRIPT(id, TARGET))}">Open</button>`;
     return `<iframe id="open-${id}" ${sandbox ? `sandbox="${sandbox}"` : ''} srcdoc="${escape(doc)}"></iframe>`;
   };
-  const scriptClick = (rel) => {
+  const scriptClick = (id, rel) => {
     const a = document.createElement('a');
     a.href = TARGET;
     a.target = '_blank';
     a.rel = rel;
     a.click();
+    askTester(id);
   };
   const B = 'Blocked';
-  const O = 'Opens';
+  const O = 'Opened';
 
-  // id, case, what opens it, Brave, uBO.
+  // id, case, what opens it, expected in Brave.
   const CASES = [
     ['wo', '<code>window.open()</code>',
-     button('wo', () => window.open(TARGET)), B, B],
+     button('wo', () => watch('wo', window.open(TARGET))), B],
     ['wo-noopener', '<code>window.open()</code> with <code>noopener</code>',
-     button('wo-noopener', () => window.open(TARGET, '_blank', 'noopener')), B, B],
+     button('wo-noopener', () => watch('wo-noopener', window.open(TARGET, '_blank', 'noopener'))), B],
     ['wo-popup', '<code>window.open()</code> as a popup window',
-     button('wo-popup', () => window.open(TARGET, '_blank', 'popup')), B, B],
+     button('wo-popup', () => watch('wo-popup', window.open(TARGET, '_blank', 'popup'))), B],
     ['allowed', 'A site the filter doesn\'t match',
-     button('allowed', () => window.open(ALLOWED)), O, O],
+     button('allowed', () => watch('allowed', window.open(ALLOWED))), O],
     ['iframe', 'From an iframe',
-     frame('iframe', ''), B, B],
+     frame('iframe', ''), B],
     ...(XFRAME ? [['cross-origin-iframe', 'From a cross-site iframe',
-        `<iframe id="open-cross-origin-iframe" src="${escape(XFRAME + '?frame=1&target=' + encodeURIComponent(TARGET))}"></iframe>`,
-        B, B]] : []),
+        `<iframe id="open-cross-origin-iframe" src="${escape(XFRAME + '?frame=cross-origin-iframe&target=' + encodeURIComponent(TARGET))}"></iframe>`,
+        B]] : []),
     ['sandboxed-iframe', 'From a sandboxed iframe',
-     frame('sandboxed-iframe', 'allow-scripts allow-popups'), B, B],
+     frame('sandboxed-iframe', 'allow-scripts allow-popups'), B],
     ['script-click', 'A script clicks a <code>target=_blank</code> link',
-     button('script-click', () => scriptClick('')), B, B],
+     button('script-click', () => scriptClick('script-click', '')), B],
     ['script-click-opener', 'Same, with <code>rel=opener</code>',
-     button('script-click-opener', () => scriptClick('opener')), B, B],
+     button('script-click-opener', () => scriptClick('script-click-opener', 'opener')), B],
     ['link', 'You click a <code>target=_blank</code> link',
-     link('link', TARGET, ''), B, O],
+     link('link', TARGET, ''), B],
     ['link-opener', 'Same, with <code>rel=opener</code>',
-     link('link-opener', TARGET, 'opener'), B, O],
+     link('link-opener', TARGET, 'opener'), B],
     ['overlay', 'You click a page covered by an invisible link',
      `<div class="overlay-box" id="open-overlay">Click here` +
-         `<a href="${escape(TARGET)}" target="_blank"></a></div>`, B, O],
+         unseen('overlay', `<a href="${escape(TARGET)}" target="_blank"></a>`) + `</div>`, B],
     ['cancel-same', 'The site cancels your click and opens the link itself',
-     `<a id="open-cancel-same" href="${escape(TARGET)}" data-cancel="${escape(TARGET)}">Link</a>`, B, O],
+     `<a id="open-cancel-same" href="${escape(TARGET)}" data-cancel="${escape(TARGET)}">Link</a>`, B],
     ['cancel-other', 'The site cancels your click and opens another URL',
-     `<a id="open-cancel-other" href="${escape(TARGET)}" data-cancel="${escape(OTHER)}">Link</a>`, B, B],
+     `<a id="open-cancel-other" href="${escape(TARGET)}" data-cancel="${escape(OTHER)}">Link</a>`, B],
     ['blank-then-navigate', 'A blank window, then the site navigates it',
      button('blank-then-navigate', () => {
        const w = window.open();
        if (w) {
          setTimeout(() => { w.location = TARGET; }, 300);
        }
-     }), B, B],
+       watch('blank-then-navigate', w);
+     }), B],
     ['hop', 'The popup loads a page, which then navigates itself',
-     button('hop', () => window.open(
-         location.pathname + '?hop=' + encodeURIComponent(TARGET))), B, B],
+     button('hop', () => watch('hop', window.open(
+         location.pathname + '?hop=' + encodeURIComponent(TARGET)))), B],
     ['redirect-wo', '<code>window.open()</code> that redirects',
-     button('redirect-wo', () => window.open(redirectTo(TARGET))), B, B],
+     button('redirect-wo', () => watch('redirect-wo', window.open(redirectTo(TARGET)))), B],
     ['redirect-link', 'You click a <code>target=_blank</code> link that redirects',
-     link('redirect-link', redirectTo(TARGET), ''), B, B],
+     link('redirect-link', redirectTo(TARGET), ''), B],
     ['middle-click', 'You middle-click or ⌘/ctrl-click a link (not a popup)',
-     `<a id="open-middle-click" href="${escape(TARGET)}">Link</a>`, O, O],
+     unseen('middle-click', `<a id="open-middle-click" href="${escape(TARGET)}">Link</a>`), O],
   ];
 
   const table = document.getElementById('cases');
-  for (const [id, description, html, brave, ubo] of CASES) {
+  for (const [id, description, html, expected] of CASES) {
     const row = table.insertRow();
     row.id = 'case-' + id;
-    row.className = brave === ubo ? '' : 'differs';
     row.innerHTML = `<td>${description}</td>` +
         `<td><a class="reset" id="ready-${id}" href="#case-${id}">reset</a>${html}</td>` +
-        `<td><span class="badge ${brave}">${brave}</span></td>` +
-        `<td><span class="badge ${ubo}">${ubo}</span></td>`;
+        `<td class="expected">${expected}</td><td id="result-${id}"></td>`;
   }
 
-  document.addEventListener('click', (e) => {
+  // A middle-click fires "auxclick" instead of "click".
+  const onOpen = (e) => {
     const open = e.target.closest('[data-open]');
-    if (open) {
+    if (open && (e.type === 'click' || e.button === 1)) {
       handlers[open.dataset.open]();
     }
+  };
+  document.addEventListener('click', onOpen);
+  document.addEventListener('auxclick', onOpen);
+  document.addEventListener('click', (e) => {
     const cancel = e.target.closest('[data-cancel]');
     if (cancel) {
       e.preventDefault();
-      window.open(cancel.dataset.cancel);
+      watch(cancel.id.slice('open-'.length), window.open(cancel.dataset.cancel));
+    }
+    const reset = e.target.closest('.reset');
+    if (reset) {
+      document.getElementById('result-' + reset.id.slice('ready-'.length)).textContent = '';
+    }
+    const manual = e.target.closest('[data-result]');
+    if (manual) {
+      show(manual.closest('td').id.slice('result-'.length), manual.dataset.result);
     }
   });
 }
