@@ -5,118 +5,258 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$popup filter test</title>
 <style>
-  body { font: 16px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
   code { background: #8882; padding: .1em .3em; border-radius: 4px; }
   table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
   th, td { text-align: left; vertical-align: top; padding: .6rem .5rem; border-top: 1px solid #8884; }
-  button, a.test { font: inherit; }
-  .pass { color: #0a7d32; font-weight: 600; }
-  .fail { color: #c22; font-weight: 600; }
-  .manual { color: #777; }
+  button, a.test, input { font: inherit; }
+  iframe { border: 1px solid #8886; width: 100%; height: 3.2rem; }
+  .overlay-box { position: relative; height: 5rem; border: 2px dashed #8888; display: grid; place-items: center; }
+  .overlay-box a { position: absolute; inset: 0; opacity: 0; }
+  .result { white-space: nowrap; }
+  .Blocked { color: #0a7d32; font-weight: 600; }
+  .Opened { color: #c22; font-weight: 600; }
+  .differs { font-weight: 600; }
+  textarea { width: 100%; height: 10rem; font: 13px/1.4 ui-monospace, monospace; }
 </style>
 </head>
 <body>
 <h1>$popup filter test</h1>
 
-<p>Setup:</p>
-<ol>
-  <li>Enable <code>brave://flags/#brave-adblock-popup-blocking</code> and relaunch.</li>
-  <li>Add this line under Custom filters in <code>brave://settings/shields/filters</code> and save: <code>||example.org^$popup</code></li>
+<h2>Setup</h2>
+<ul>
+  <li><b>Brave (this PR):</b> enable <code>brave://flags/#brave-adblock-popup-blocking</code> and relaunch.
+    Add <code id="filter-line"></code> under Custom filters in <code>brave://settings/shields/filters</code>.</li>
+  <li><b>uBlock Origin (MV2):</b> install it from <code>brave://settings/extensions/v2</code>. In its dashboard, under
+    Filter lists, enable "My filters", then add the same line under "My filters" and apply.</li>
   <li>Keep Shields up on this page.</li>
-</ol>
+  <li>Variants to run once each: Shields down on this page, and the flag off. Every case should open in both.</li>
+</ul>
+<p>
+  URL parameters: <code>target</code> (a URL the filter matches, default <code>https://example.org/</code>),
+  <code>allowed</code> (a URL it doesn't match, default <code>https://example.com/</code>) and <code>redirect</code>
+  (a URL prefix that 302-redirects to the URL-encoded URL appended to it). The default redirect uses httpbin.org,
+  so the redirect cases need it to be reachable. <code>xframe</code> adds a case that frames this page from that URL,
+  which must be a copy of this page on another origin.
+</p>
+<p>Target: <code id="show-target"></code><br>Redirect: <code id="show-redirect"></code></p>
 
-<p>Run each test once, top to bottom. Tests 1 to 3 fill in their own result. Tests 4 to 6 need you to look at what the tab does.</p>
+<h2>Cases</h2>
+<p>
+  "Blocked" means a window opened and closed right away and the target never loaded. With this PR a blocked popup is
+  also listed under the blocked pop-up icon in the address bar, where you can open it. Cases with a window the page
+  can see record their own result after 2 s. For the rest, look at the tab and click Opened or Blocked.
+</p>
+<p>
+  Click <b>Ready</b> before each case. uBO lets a popup through if its URL is the same as the last link you
+  clicked, in any tab and however long ago, so without this one case can change the next one's result.
+</p>
+<p><label>Browser label: <input id="label" placeholder="e.g. uBO 1.76.6, Brave PR build"></label></p>
 
-<table>
-  <tr><th>#</th><th>Test</th><th>Expected</th><th>Result</th></tr>
-  <tr>
-    <td>1</td>
-    <td><button id="open-blocked">Open example.org from script</button></td>
-    <td>A tab opens and closes right away. example.org never loads.</td>
-    <td id="r1"></td>
-  </tr>
-  <tr>
-    <td>2</td>
-    <td><button id="open-allowed">Open example.com from script</button></td>
-    <td>example.com opens in a new tab and stays open.</td>
-    <td id="r2"></td>
-  </tr>
-  <tr>
-    <td>3</td>
-    <td><button id="blank-then-navigate">Open a blank tab, then send it to example.org</button></td>
-    <td>A blank tab opens and closes within a second.</td>
-    <td id="r3"></td>
-  </tr>
-  <tr>
-    <td>4</td>
-    <td><button id="noopener">Open example.org with noopener</button></td>
-    <td>A tab opens and closes right away.</td>
-    <td class="manual">check the tab</td>
-  </tr>
-  <tr>
-    <td>5</td>
-    <td><button id="script-click">Click a link to example.org from script</button></td>
-    <td>A tab opens and closes right away.</td>
-    <td class="manual">check the tab</td>
-  </tr>
-  <tr>
-    <td>6</td>
-    <td><a class="test" id="link" href="https://example.org/" target="_blank">Link to example.org</a></td>
-    <td>Click it, or focus it and press Enter. example.org opens and stays open, because you clicked the link yourself.</td>
-    <td class="manual">check the tab</td>
-  </tr>
+<table id="cases">
+  <tr><th>#</th><th>Case</th><th>uBO</th><th>This PR</th><th>Result</th></tr>
 </table>
 
+<h2>Results</h2>
+<p>
+  <button id="copy">Copy as markdown table</button>
+  <button id="clear">Clear results for this label</button>
+</p>
+<textarea id="markdown" readonly></textarea>
+
 <script>
-const BLOCKED = 'https://example.org/';
-const ALLOWED = 'https://example.com/';
+const params = new URLSearchParams(location.search);
+const TARGET = params.get('target') || 'https://example.org/';
+const ALLOWED = params.get('allowed') || 'https://example.com/';
+const REDIRECT =
+    params.get('redirect') || 'https://httpbin.org/redirect-to?status_code=302&url=';
+const redirectTo = (url) => REDIRECT + encodeURIComponent(url);
+const OTHER = new URL('?other=1', TARGET).href;
+const XFRAME = params.get('xframe');
 
-function report(id, pass, text) {
-  const cell = document.getElementById(id);
-  cell.textContent = (pass ? 'PASS: ' : 'FAIL: ') + text;
-  cell.className = pass ? 'pass' : 'fail';
+// A popup opened by the "hop" case lands on this page, which then navigates
+// itself to the target.
+const HOP = params.get('hop');
+if (HOP) {
+  document.body.textContent = 'Navigating to ' + HOP;
+  setTimeout(() => location.replace(HOP), 500);
+} else if (params.has('frame')) {
+  // Framed by the "cross-origin-iframe" case.
+  document.body.style.margin = '0';
+  document.body.innerHTML = '<button id="open">Open</button>';
+  document.getElementById('open').onclick = () => window.open(TARGET);
+} else {
+  setUp();
 }
 
-function check(id, w, shouldClose) {
-  if (!w) {
-    report(id, false, 'no window was opened');
-    return;
-  }
-  setTimeout(() => {
-    if (shouldClose) {
-      report(id, w.closed, w.closed ? 'tab was closed' : 'tab stayed open');
-    } else {
-      report(id, !w.closed, w.closed ? 'tab was closed' : 'tab stayed open');
+function setUp() {
+  const escape = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const handlers = {};
+  const button = (id, onclick) => {
+    handlers[id] = onclick;
+    return `<button id="open-${id}" data-open="${id}">Open</button>`;
+  };
+  const link = (id, href, rel) =>
+      `<a class="test" id="open-${id}" href="${escape(href)}" target="_blank" rel="${rel}">Link</a>`;
+  const frame = (id, sandbox) => {
+    const doc = `<button id="open" onclick="window.open(${escape(JSON.stringify(TARGET))})">Open</button>`;
+    return `<iframe id="open-${id}" ${sandbox ? `sandbox="${sandbox}"` : ''} srcdoc="${escape(doc)}"></iframe>`;
+  };
+  const scriptClick = (rel) => {
+    const a = document.createElement('a');
+    a.href = TARGET;
+    a.target = '_blank';
+    a.rel = rel;
+    a.click();
+  };
+  // Records the result of a case whose window the page can see.
+  const watch = (id, w) => {
+    if (!w) {
+      record(id, 'No window');
+      return;
     }
-  }, 2000);
-}
+    setTimeout(() => record(id, w.closed ? 'Blocked' : 'Opened'), 2000);
+  };
 
-document.getElementById('open-blocked').onclick = () => {
-  check('r1', window.open(BLOCKED), true);
-};
+  // id, description, the element that opens the popup, expected with uBO,
+  // expected with this PR.
+  const CASES = [
+    ['wo', '`window.open(target)` from a click handler',
+     button('wo', () => watch('wo', window.open(TARGET))), 'Blocked', 'Blocked'],
+    ['wo-noopener', '`window.open(target, "_blank", "noopener")`',
+     button('wo-noopener', () => window.open(TARGET, '_blank', 'noopener')), 'Blocked', 'Blocked'],
+    ['wo-popup', '`window.open(target, "_blank", "popup")` (popup window)',
+     button('wo-popup', () => watch('wo-popup', window.open(TARGET, '_blank', 'popup'))),
+     'Blocked', 'Blocked'],
+    ['allowed', 'Control: `window.open(allowed)`, which the filter doesn\'t match',
+     button('allowed', () => watch('allowed', window.open(ALLOWED))), 'Opened', 'Opened'],
+    ['iframe', '`window.open(target)` from a same-origin iframe',
+     frame('iframe', ''), 'Blocked', 'Blocked'],
+    ...(XFRAME ? [['cross-origin-iframe', '`window.open(target)` from a cross-origin iframe',
+        `<iframe id="open-cross-origin-iframe" src="${escape(XFRAME + '?frame=1&target=' + encodeURIComponent(TARGET))}"></iframe>`,
+        'Blocked', 'Blocked']] : []),
+    ['sandboxed-iframe', '`window.open(target)` from a sandboxed iframe (opaque origin)',
+     frame('sandboxed-iframe', 'allow-scripts allow-popups'), 'Blocked', 'Blocked'],
+    ['script-click', 'Script calls `.click()` on a `target=_blank` link',
+     button('script-click', () => scriptClick('')), 'Blocked', 'Blocked'],
+    ['script-click-opener', 'Script calls `.click()` on a `target=_blank rel=opener` link',
+     button('script-click-opener', () => scriptClick('opener')), 'Blocked', 'Blocked'],
+    ['link', 'You click a `target=_blank` link',
+     link('link', TARGET, ''), 'Opened', 'Blocked, can open from the icon'],
+    ['link-opener', 'You click a `target=_blank rel=opener` link',
+     link('link-opener', TARGET, 'opener'), 'Opened', 'Blocked, can open from the icon'],
+    ['overlay', 'Invisible `target=_blank` link over a box (click anywhere in the box)',
+     `<div class="overlay-box" id="open-overlay">Click anywhere in this box` +
+         `<a href="${escape(TARGET)}" target="_blank"></a></div>`,
+     'Opened', 'Blocked, can open from the icon'],
+    ['cancel-same', 'Site cancels your click on a link and calls `window.open(link.href)`',
+     `<a class="test" id="open-cancel-same" href="${escape(TARGET)}" data-cancel="${escape(TARGET)}">Link</a>`,
+     'Opened', 'Blocked, can open from the icon'],
+    ['cancel-other', 'Site cancels your click on a link and calls `window.open(other_url)`',
+     `<a class="test" id="open-cancel-other" href="${escape(TARGET)}" data-cancel="${escape(OTHER)}">Link</a>`,
+     'Blocked', 'Blocked'],
+    ['blank-then-navigate', '`window.open()`, then sets its `location` to target 300 ms later',
+     button('blank-then-navigate', () => {
+       const w = window.open();
+       if (w) {
+         setTimeout(() => { w.location = TARGET; }, 300);
+       }
+       watch('blank-then-navigate', w);
+     }), 'Blocked', 'Blocked'],
+    ['hop', 'Popup opens a page on this site, which navigates itself to target after 0.5 s',
+     button('hop', () => window.open(
+         location.pathname + '?hop=' + encodeURIComponent(TARGET))), 'Blocked', 'Blocked'],
+    ['redirect-wo', '`window.open(url)` that redirects (302) to target',
+     button('redirect-wo', () => watch('redirect-wo', window.open(redirectTo(TARGET)))),
+     'Blocked', 'Blocked'],
+    ['redirect-link', 'You click a `target=_blank` link that redirects (302) to target',
+     link('redirect-link', redirectTo(TARGET), ''), 'Blocked', 'Blocked'],
+    ['middle-click', 'Middle-click, or cmd-click (ctrl-click on Windows/Linux), a plain link',
+     `<a class="test" id="open-middle-click" href="${escape(TARGET)}">Link</a>`,
+     'Opened', 'Opened (not a popup)'],
+  ];
 
-document.getElementById('open-allowed').onclick = () => {
-  check('r2', window.open(ALLOWED), false);
-};
+  const code = (s) => escape(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  const table = document.getElementById('cases');
+  CASES.forEach(([id, description, html, ubo, pr], i) => {
+    const row = table.insertRow();
+    row.id = 'case-' + id;
+    row.innerHTML = `<td>${i + 1}</td><td>${code(description)}<br>` +
+        `<a class="test" id="ready-${id}" href="#case-${id}">Ready</a> then ${html}</td><td>${ubo}</td>` +
+        `<td class="${ubo === pr ? '' : 'differs'}">${pr}</td>` +
+        `<td><span id="result-${id}" class="result"></span><br>` +
+        `<button data-record="${id}" data-value="Opened">Opened</button> ` +
+        `<button data-record="${id}" data-value="Blocked">Blocked</button></td>`;
+  });
 
-document.getElementById('blank-then-navigate').onclick = () => {
-  const w = window.open();
-  if (w) {
-    setTimeout(() => { w.location = BLOCKED; }, 300);
+  // Results, stored per browser label.
+  const STORE = 'popup-test-results';
+  const load = () => JSON.parse(localStorage.getItem(STORE) || '{}');
+  const labelInput = document.getElementById('label');
+  const label = () => labelInput.value.trim() || 'unlabeled';
+
+  function record(id, result) {
+    const all = load();
+    (all[label()] = all[label()] || {})[id] = result;
+    localStorage.setItem(STORE, JSON.stringify(all));
+    render();
   }
-  check('r3', w, true);
-};
+  window.record = record;
 
-document.getElementById('noopener').onclick = () => {
-  window.open(BLOCKED, '_blank', 'noopener');
-};
+  function markdown() {
+    const all = load();
+    const labels = Object.keys(all);
+    const rows = [
+      `| How the popup is opened | ${labels.join(' | ')} |`,
+      `|---|${labels.map(() => '---').join('|')}|`,
+    ];
+    for (const [id, description] of CASES) {
+      rows.push(`| ${description} | ${labels.map((l) => all[l][id] || 'not tested').join(' | ')} |`);
+    }
+    return rows.join('\n');
+  }
 
-document.getElementById('script-click').onclick = () => {
-  const a = document.createElement('a');
-  a.href = BLOCKED;
-  a.target = '_blank';
-  a.click();
-};
+  function render() {
+    const mine = load()[label()] || {};
+    for (const [id] of CASES) {
+      const cell = document.getElementById('result-' + id);
+      cell.textContent = mine[id] || '';
+      cell.className = 'result ' + (mine[id] || '').replace(/ /g, '-');
+    }
+    document.getElementById('markdown').value = markdown();
+  }
+
+  document.addEventListener('click', (e) => {
+    const open = e.target.closest('[data-open]');
+    if (open) {
+      handlers[open.dataset.open]();
+    }
+    const cancel = e.target.closest('[data-cancel]');
+    if (cancel) {
+      e.preventDefault();
+      window.open(cancel.dataset.cancel);
+    }
+    const rec = e.target.closest('[data-record]');
+    if (rec) {
+      record(rec.dataset.record, rec.dataset.value);
+    }
+  });
+
+  labelInput.value = localStorage.getItem(STORE + '-label') || '';
+  labelInput.addEventListener('input', () => {
+    localStorage.setItem(STORE + '-label', labelInput.value);
+    render();
+  });
+  document.getElementById('copy').onclick = () => navigator.clipboard.writeText(markdown());
+  document.getElementById('clear').onclick = () => {
+    const all = load();
+    delete all[label()];
+    localStorage.setItem(STORE, JSON.stringify(all));
+    render();
+  };
+
+  render();
+}
 </script>
 </body>
 </html>
